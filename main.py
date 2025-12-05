@@ -157,8 +157,8 @@ class WTime:
         elapsed = current_time - self.start_timestamp
 
 
-        if self.total_duration > 0 and elapsed >= self.total_duration:
-            print(f"\nMonitoring finished after {self.elapsed} seconds.")
+        if self.total_duration > 0 and elapsed >= (self.total_duration+1):
+            print(f"\nMonitoring finished after {elapsed} seconds.")
             plt.close(self.fig)
             return
         
