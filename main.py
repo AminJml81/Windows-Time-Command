@@ -4,6 +4,8 @@ import argparse
 import sys
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+import csv
+from datetime import datetime
 
 
 class WTime:
@@ -45,6 +47,10 @@ class WTime:
         self.text_sys = None
         self.text_user = None
 
+        self.csv_file = None
+        self.csv_writer = None
+        self.csv_data_buffer = []
+
 
     def parse_args(self):
         parser = argparse.ArgumentParser(
@@ -56,7 +62,8 @@ class WTime:
         parser.add_argument('-id', '--pid', type=int, help='Specify the exact PID to monitor.')
         parser.add_argument('-g', '--graph', action='store_true', help='Show real-time graph.')
         parser.add_argument('-t', '--total-duration', type=int, default=0, help='Total monitoring time in seconds. Closes automatically.')
-        
+        parser.add_argument('--csv', type=str, help='Specify the output CSV file path to save monitoring data.')
+
         self.args = parser.parse_args()
 
     def handle_arguments(self):
@@ -76,7 +83,43 @@ class WTime:
                 self.total_duration = self.args.total_duration
                 
         self.pid = self.args.pid if self.args.pid else 0
+
+        if self.args.csv and not self.args.list:
+            try:
+                self.csv_file = open(self.args.csv, 'w', newline='')
+                self.csv_writer = csv.writer(self.csv_file)
+                self.csv_writer.writerow(['Timestamp', 'Elapsed', 'Interval', 'Total_CPU_Efficiency', 'System_Efficiency', 'User_Efficiency'])
+                print(f"Data will be saved to '{self.args.csv}'")
+            except Exception as e:
+                print(f"Error opening CSV file: {e}. Monitoring continues without saving.")
+                self.csv_file = None
+                self.csv_writer = None
+
+    def save_data(self, elapsed):
+        if self.csv_writer:
+            row = [
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                f"{elapsed:.2f}",
+                f"{self.elapsed_wall_time:.2f}",
+                f"{self.cpu_efficiency:.2f}",
+                f"{self.system_efficiency:.2f}",
+                f"{self.user_efficiency:.2f}"
+            ]
+            self.csv_data_buffer.append(row)
             
+            # if not graph mode, add data to csv now and empty the list(buffer). 
+            if not self.args.graph:
+                self.csv_writer.writerow(row)
+                self.csv_data_buffer = [] # بافر را پاک می‌کنیم
+        
+    def close_csv(self):
+        if self.csv_file:
+            if self.args.graph and self.csv_data_buffer:
+                # for graph mode save data at the end of the monitoring.
+                self.csv_writer.writerows(self.csv_data_buffer)
+                print(f"\nFinal data written to '{self.args.csv}'")
+            self.csv_file.close()  
+                  
     def find_process(self):
         processes = []
         for process in psutil.process_iter(['pid', 'name']):
@@ -111,12 +154,15 @@ class WTime:
             sys.exit(0)
         
         current_time = time.time()
-        current_cpu_times = self.process.cpu_times()
+        elapsed = current_time - self.start_timestamp
+
 
         if self.total_duration > 0 and elapsed >= self.total_duration:
             print(f"\nMonitoring finished after {self.elapsed} seconds.")
             plt.close(self.fig)
             return
+        
+        current_cpu_times = self.process.cpu_times()
         
         # if there is previous data.
         if self.t1_time is not None:
@@ -124,11 +170,9 @@ class WTime:
             self.t2_cpu_times = current_cpu_times
             
             self.calculate_parameters()
-            # if self.total_duration > 0 and elapsed >= self.total_duration:
-            # print(f"\nMonitoring finished after {self.total_duration} seconds.")
-            # raise SystemExit
-            # پرینت در کنسول (همزمان با نمودار)
-            # از \r استفاده میکنیم که خط جدید نسازه و روی همون خط بنویسه
+
+            self.save_data(elapsed)
+
             print(f"\rCPU: {self.cpu_efficiency:5.2f}% | Sys: {self.system_efficiency:5.2f}% | User: {self.user_efficiency:5.2f}%", end="")
 
             # adding these data to their corresponding list.
@@ -195,6 +239,7 @@ class WTime:
 
             if len(processes) == 0:
                 print(f"No '{self.process_name}' process found.")
+                self.close_csv()
             else:
                 if self.args.list:
                     self.list_processes(processes)
@@ -204,6 +249,7 @@ class WTime:
                     if self.process:
                         if self.args.graph:
                             self.start_graph_mode()
+                            self.close_csv()
                         else:
                             print(f"Monitoring started for PID {self.pid}. Interval: {self.interval}. Total Duration: {self.total_duration if self.total_duration > 0 else 'Infinite'}")
                             
@@ -226,26 +272,26 @@ class WTime:
 
                                 self.calculate_parameters()
                                 self.print_parameters()
+
+                                self.save_data(elapsed_total)
                                 
                                 # update for the next interval.
                                 self.t1_cpu_times = self.t2_cpu_times
                                 self.t1_time = self.t2_time
 
-                            
-                            self.t2_cpu_times = self.process.cpu_times()
-                            self.t2_time = time.time()
-
-                            self.calculate_parameters()
-
-                            self.print_parameters()
+                                                        
+                            self.close_csv()
+                    
                     else:
                         print(f"Found No '{self.process_name}' process with pid {self.pid}.")
 
         except KeyboardInterrupt:
             print('Monitoring stopped by user.')
+            self.close_csv()
 
         except Exception as e:
             print(f'Monitoring stopped by following Error: {e}')
+            self.close_csv()
 
 
     def calculate_parameters(self):
